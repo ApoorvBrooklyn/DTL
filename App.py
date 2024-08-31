@@ -1,48 +1,68 @@
 import requests
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+from geopy.distance import geodesic
 
-# Function to get latitude and longitude from a place name
-def get_coordinates(place_name, api_key):
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={place_name}&key={api_key}"
-    response = requests.get(url)
-    result = response.json()
+def get_elevation(lat, lon):
+    url = f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        return data['results'][0]['elevation']
+    except requests.RequestException as e:
+        print(f"Error fetching elevation data: {e}")
+        return None
 
-    if result['status'] == 'OK':
-        location = result['results'][0]['geometry']['location']
-        return location['lat'], location['lng']
-    else:
-        raise Exception(f"Error fetching coordinates: {result['status']}")
+def geocode_location(geolocator, location, attempt=1, max_attempts=3):
+    try:
+        return geolocator.geocode(location, exactly_one=True, addressdetails=True)
+    except (GeocoderTimedOut, GeocoderUnavailable) as e:
+        if attempt <= max_attempts:
+            print(f"Geocoding attempt {attempt} failed. Retrying...")
+            return geocode_location(geolocator, location, attempt + 1, max_attempts)
+        else:
+            print(f"Failed to geocode after {max_attempts} attempts: {e}")
+            return None
 
-# Function to get elevation data for a given latitude and longitude
-def get_elevation(lat, lon, api_key):
-    url = f"https://maps.googleapis.com/maps/api/elevation/json?locations={lat},{lon}&key={api_key}"
-    response = requests.get(url)
-    result = response.json()
-
-    if result['status'] == 'OK':
-        elevation = result['results'][0]['elevation']
-        return elevAPIsation
-    else:
-        raise Exception(f"Error fetching elevation data: {result['status']}")
-
-# Function to calculate elevation difference between two places
-def calculate_elevation_difference(place1, place2, api_key):
-    lat1, lon1 = get_coordinates(place1, api_key)
-    lat2, lon2 = get_coordinates(place2, api_key)
+def calculate_elevation_difference(location1, location2):
+    geolocator = Nominatim(user_agent="elevation_calculator")
     
-    elevation1 = get_elevation(lat1, lon1, api_key)
-    elevation2 = get_elevation(lat2, lon2, api_key)
+    # Geocode locations
+    loc1 = geocode_location(geolocator, location1)
+    loc2 = geocode_location(geolocator, location2)
     
-    elevation_difference = elevation2 - elevation1
-    return elevation_difference
+    if not loc1 or not loc2:
+        return "Unable to geocode one or both locations."
+    
+    # Get elevations
+    elev1 = get_elevation(loc1.latitude, loc1.longitude)
+    elev2 = get_elevation(loc2.latitude, loc2.longitude)
+    
+    if elev1 is None or elev2 is None:
+        return "Unable to fetch elevation data for one or both locations."
+    
+    # Calculate elevation difference
+    elev_diff = abs(elev1 - elev2)
+    
+    # Calculate distance
+    distance = geodesic((loc1.latitude, loc1.longitude), (loc2.latitude, loc2.longitude)).kilometers
+    
+    # Prepare location details
+    loc1_details = f"{loc1.raw['address'].get('road', '')}, {loc1.raw['address'].get('city', '')}, {loc1.raw['address'].get('state', '')}, {loc1.raw['address'].get('country', '')}"
+    loc2_details = f"{loc2.raw['address'].get('road', '')}, {loc2.raw['address'].get('city', '')}, {loc2.raw['address'].get('state', '')}, {loc2.raw['address'].get('country', '')}"
+    
+    return f"Location 1: {loc1_details}\n" \
+           f"Coordinates: ({loc1.latitude}, {loc1.longitude})\n" \
+           f"Elevation: {elev1:.2f}m\n\n" \
+           f"Location 2: {loc2_details}\n" \
+           f"Coordinates: ({loc2.latitude}, {loc2.longitude})\n" \
+           f"Elevation: {elev2:.2f}m\n\n" \
+           f"Elevation difference: {elev_diff:.2f}m\n" \
+           f"Distance between locations: {distance:.2f}km"
 
 # Example usage
-if __name__ == "__main__":
-    # Replace with your own API key
-    API_KEY = ""
-    
-    # Enter the names of the two places
-    place1 = "San Francisco, CA"
-    place2 = "Los Angeles, CA"
-    
-    elevation_difference = calculate_elevation_difference(place1, place2, API_KEY)
-    print(f"Elevation difference between {place1} and {place2}: {elevation_difference:.2f} meters")
+location1 = "Indraprastha Nagari Apartment,Kolhapur Maharashtra"
+location2 = "Central Bus Stand, Kolhapur, Maharashtra"
+result = calculate_elevation_difference(location1, location2)
+print(result)
