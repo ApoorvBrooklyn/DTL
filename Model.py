@@ -2,111 +2,144 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-import joblib  # Import joblib for saving/loading models
+from sklearn.metrics import mean_squared_error, r2_score
+import joblib
 
-# Function to generate random time in HH:MM:SS format
-def generate_random_time():
-    return f'{np.random.randint(0, 24):02}:{np.random.randint(0, 60):02}:{np.random.randint(0, 60):02}'
-
-# Generate Random Data
-np.random.seed(42)  # For reproducibility
-
-num_samples = 1000
+# Generate synthetic dataset
+np.random.seed(42)
+n_samples = 10000
 
 data = {
-    'Battery_Capacity': np.random.uniform(50, 100, num_samples).astype(int),
-    'Battery_Voltage': np.random.uniform(350, 450, num_samples).astype(int),
-    'Battery_SOC': np.random.uniform(10, 100, num_samples).astype(int),
-    'Battery_Temperature': np.random.uniform(20, 35, num_samples).astype(int),
-    'Departure_Time': [generate_random_time() for _ in range(num_samples)],
-    'Arrival_Time': [generate_random_time() for _ in range(num_samples)],
-    'Distance': np.random.uniform(50, 300, num_samples).astype(int),
-    'Traffic_Intensity': np.random.choice(['Low', 'Medium', 'High'], num_samples),
-    'Elevation': np.random.uniform(0, 1000, num_samples).astype(int),
-    'Optimal_Charging_Start': [generate_random_time() for _ in range(num_samples)],
-    'Optimal_Charging_End': [generate_random_time() for _ in range(num_samples)],
-    'Range': np.random.uniform(80, 250, num_samples).astype(int)
+    'battery_temp': np.random.uniform(0, 40, n_samples),
+    'current_charging': np.random.uniform(0, 100, n_samples),
+    'soc': np.random.uniform(0, 100, n_samples),
+    'battery_capacity': np.random.uniform(50, 100, n_samples),
+    'elevation': np.random.uniform(-100, 1000, n_samples),
+    'traffic_status': np.random.choice(['Light', 'Moderate', 'Heavy'], n_samples),
+    'speed': np.random.uniform(0, 120, n_samples),
+    'wind_speed': np.random.uniform(0, 30, n_samples),
+    'ac_usage': np.random.choice([0, 1], n_samples)
 }
 
-# Create DataFrame
 df = pd.DataFrame(data)
 
-# Convert time columns to numeric features (e.g., seconds from midnight)
-def time_to_seconds(time_str):
-    h, m, s = map(int, time_str.split(':'))
-    return h * 3600 + m * 60 + s
+# Calculate range based on factors
+df['range'] = (
+    df['battery_capacity'] * 5  # Base range
+    - df['battery_temp'] * 0.5  # Temperature impact
+    - (df['elevation'].clip(lower=0) * 0.02)  # Elevation impact (only for positive elevation)
+    - (df['speed'] ** 2 * 0.001)  # Speed impact
+    - (df['wind_speed'] * 0.5)  # Wind impact
+    - (df['ac_usage'] * 10)  # AC usage impact
+)
 
-df['Departure_Time'] = df['Departure_Time'].apply(time_to_seconds)
-df['Arrival_Time'] = df['Arrival_Time'].apply(time_to_seconds)
-df['Optimal_Charging_Start'] = df['Optimal_Charging_Start'].apply(time_to_seconds)
-df['Optimal_Charging_End'] = df['Optimal_Charging_End'].apply(time_to_seconds)
+# Traffic impact
+traffic_impact = {'Light': 1, 'Moderate': 0.9, 'Heavy': 0.7}
+df['range'] *= df['traffic_status'].map(traffic_impact)
 
-# Split data into features and target variables
-X = df.drop(['Optimal_Charging_Start', 'Optimal_Charging_End', 'Range'], axis=1)
-y_start = df['Optimal_Charging_Start']
-y_end = df['Optimal_Charging_End']
-y_range = df['Range']
+# Ensure range is always positive
+df['range'] = df['range'].clip(lower=0)
 
-# Encode categorical variables
-label_encoder = LabelEncoder()
-X['Traffic_Intensity'] = label_encoder.fit_transform(X['Traffic_Intensity'])
+# Split data
+X = df.drop('range', axis=1)
+y = df['range']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Train-Test Split
-X_train, X_test, y_train_start, y_test_start = train_test_split(X, y_start, test_size=0.2, random_state=42)
-X_train, X_test, y_train_end, y_test_end = train_test_split(X, y_end, test_size=0.2, random_state=42)
-X_train, X_test, y_train_range, y_test_range = train_test_split(X, y_range, test_size=0.2, random_state=42)
+# One-hot encode categorical variables
+X_train_encoded = pd.get_dummies(X_train)
+X_test_encoded = pd.get_dummies(X_test)
 
-# Train Models
-model_start = RandomForestRegressor()
-model_end = RandomForestRegressor()
-model_range = RandomForestRegressor()
+# Train Random Forest model
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+rf_model.fit(X_train_encoded, y_train)
 
-model_start.fit(X_train, y_train_start)
-model_end.fit(X_train, y_train_end)
-model_range.fit(X_train, y_train_range)
+# Make predictions
+y_pred = rf_model.predict(X_test_encoded)
 
-# Save the trained models
-joblib.dump(model_start, 'model_start.pkl')
-joblib.dump(model_end, 'model_end.pkl')
-joblib.dump(model_range, 'model_range.pkl')
+# Evaluate the model
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
 
-# Make Predictions
-start_predictions = model_start.predict(X_test)
-end_predictions = model_end.predict(X_test)
-range_predictions = model_range.predict(X_test)
+print(f"Mean Squared Error: {mse}")
+print(f"R-squared Score: {r2}")
 
-# Calculate metrics for start time predictions
-start_mae = mean_absolute_error(y_test_start, start_predictions)
-start_mse = mean_squared_error(y_test_start, start_predictions)
-start_r2 = r2_score(y_test_start, start_predictions)
+# Function to predict range
+def predict_range(battery_temp, current_charging, soc, battery_capacity, elevation, traffic_status, speed, wind_speed, ac_usage):
+    input_data = pd.DataFrame({
+        'battery_temp': [battery_temp],
+        'current_charging': [current_charging],
+        'soc': [soc],
+        'battery_capacity': [battery_capacity],
+        'elevation': [elevation],
+        'traffic_status': [traffic_status],
+        'speed': [speed],
+        'wind_speed': [wind_speed],
+        'ac_usage': [ac_usage]
+    })
+    input_encoded = pd.get_dummies(input_data)
+    
+    # Ensure all columns from training are present
+    for col in X_train_encoded.columns:
+        if col not in input_encoded.columns:
+            input_encoded[col] = 0
+    
+    # Reorder columns to match training data
+    input_encoded = input_encoded[X_train_encoded.columns]
+    
+    return rf_model.predict(input_encoded)[0]
 
-# Calculate metrics for end time predictions
-end_mae = mean_absolute_error(y_test_end, end_predictions)
-end_mse = mean_squared_error(y_test_end, end_predictions)
-end_r2 = r2_score(y_test_end, end_predictions)
+# Example prediction
+print(predict_range(25, 50, 80, 75, 100, 'Moderate', 60, 10, 1))
 
-# Calculate metrics for range predictions
-range_mae = mean_absolute_error(y_test_range, range_predictions)
-range_mse = mean_squared_error(y_test_range, range_predictions)
-range_r2 = r2_score(y_test_range, range_predictions)
+# Feature importance
+feature_importance = pd.DataFrame({'feature': X_train_encoded.columns, 'importance': rf_model.feature_importances_})
+print(feature_importance.sort_values('importance', ascending=False).head(10))
 
-# Convert seconds back to HH:MM:SS for reporting
-def seconds_to_time(seconds):
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    return f'{h:02}:{m:02}:{s:02}'
 
-start_predictions_time = [seconds_to_time(int(pred)) for pred in start_predictions]
-end_predictions_time = [seconds_to_time(int(pred)) for pred in end_predictions]
+# Save the model
+joblib.dump(rf_model, 'ev_range_model.joblib')
 
-print("Optimal Charging Start Time Predictions:", start_predictions_time[:10])  # Print first 10 for brevity
-print("Optimal Charging End Time Predictions:", end_predictions_time[:10])    # Print first 10 for brevity
-print("Range Predictions:", range_predictions[:10])                          # Print first 10 for brevity
+# Function to load the model
+def load_model():
+    return joblib.load('ev_range_model.joblib')
 
-print("\nModel Evaluation Metrics:")
-print(f"Start Time - MAE: {start_mae:.2f}, MSE: {start_mse:.2f}, R²: {start_r2:.2f}")
-print(f"End Time - MAE: {end_mae:.2f}, MSE: {end_mse:.2f}, R²: {end_r2:.2f}")
-print(f"Range - MAE: {range_mae:.2f}, MSE: {range_mse:.2f}, R²: {range_r2:.2f}")
+# Function to predict range
+def predict_range(model, battery_temp, current_charging, soc, battery_capacity, elevation, traffic_status, speed, wind_speed, ac_usage):
+    input_data = pd.DataFrame({
+        'battery_temp': [battery_temp],
+        'current_charging': [current_charging],
+        'soc': [soc],
+        'battery_capacity': [battery_capacity],
+        'elevation': [elevation],
+        'traffic_status': [traffic_status],
+        'speed': [speed],
+        'wind_speed': [wind_speed],
+        'ac_usage': [ac_usage]
+    })
+    input_encoded = pd.get_dummies(input_data)
+    
+    # Ensure all columns from training are present
+    for col in X_train_encoded.columns:
+        if col not in input_encoded.columns:
+            input_encoded[col] = 0
+    
+    # Reorder columns to match training data
+    input_encoded = input_encoded[X_train_encoded.columns]
+    
+    return model.predict(input_encoded)[0]
+
+# Function to suggest optimal charging
+def optimal_charging_suggestion(current_soc, predicted_range, trip_distance):
+    if predicted_range >= trip_distance * 1.2:  # 20% buffer
+        return "No charging needed for this trip."
+    elif current_soc < 20:
+        return "Charge immediately to at least 50% for battery health."
+    else:
+        charge_needed = min((trip_distance / predicted_range) * 100, 80)
+        return f"Charge to {charge_needed:.0f}% for optimal range and battery health."
+
+# Example usage
+if __name__ == "__main__":
+    model = load_model()
+    print(predict_range(model, 25, 50, 80, 75, 100, 'Moderate', 60, 10, 1))
+    print(optimal_charging_suggestion(30, 200, 180))

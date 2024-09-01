@@ -1,3 +1,4 @@
+import streamlit as st
 import requests
 import json
 from datetime import datetime, timedelta
@@ -11,9 +12,13 @@ load_dotenv()
 GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_API_KEY')
 
 # Load the ML model
-model = joblib.load('ev_range_model.joblib')
+@st.cache_resource
+def load_model():
+    return joblib.load('ev_range_model.joblib')
 
+model = load_model()
 
+# Helper functions
 def predict_range(battery_temp, current_charging, soc, battery_capacity, elevation, traffic_status, speed, wind_speed, ac_usage):
     input_data = pd.DataFrame({
         'battery_temp': [battery_temp],
@@ -81,7 +86,7 @@ def get_elevation(lat, lon):
         data = response.json()
         return data['results'][0]['elevation']
     except requests.RequestException as e:
-        print(f"Error fetching elevation data: {e}")
+        st.error(f"Error fetching elevation data: {e}")
         return None
 
 def geocode_location(location):
@@ -98,7 +103,7 @@ def geocode_location(location):
                 'display_name': result['formatted_address']
             }
     except requests.RequestException as e:
-        print(f"Error with Google geocoding: {e}")
+        st.error(f"Error with Google geocoding: {e}")
     return None
 
 def get_route_and_traffic(origin, destination):
@@ -126,7 +131,7 @@ def get_route_and_traffic(origin, destination):
             
             return distance, duration, route_details, waypoints
     except requests.RequestException as e:
-        print(f"Error fetching route data: {e}")
+        st.error(f"Error fetching route data: {e}")
     return None, None, None, None
 
 def get_traffic_updates(waypoints):
@@ -166,7 +171,7 @@ def get_traffic_updates(waypoints):
                 current_time = estimated_arrival
         
         except requests.RequestException as e:
-            print(f"Error fetching traffic data: {e}")
+            st.error(f"Error fetching traffic data: {e}")
     
     return traffic_updates
 
@@ -179,7 +184,7 @@ def get_nearby_ev_charging_stations(location, radius=5000):
         if data['status'] == 'OK':
             return data['results']
     except requests.RequestException as e:
-        print(f"Error fetching EV charging station data: {e}")
+        st.error(f"Error fetching EV charging station data: {e}")
     return []
 
 def get_ev_charging_stations_along_route(waypoints, radius=5000):
@@ -189,6 +194,19 @@ def get_ev_charging_stations_along_route(waypoints, radius=5000):
         stations_near_waypoint = get_nearby_ev_charging_stations(location, radius)
         charging_stations.extend(stations_near_waypoint)
     return charging_stations
+
+def parse_duration(duration_str):
+    parts = duration_str.split()
+    hours = 0
+    minutes = 0
+    for i in range(0, len(parts), 2):
+        value = int(parts[i])
+        unit = parts[i+1].lower()
+        if 'hour' in unit:
+            hours = value
+        elif 'min' in unit:
+            minutes = value
+    return hours + minutes / 60
 
 def calculate_travel_info(source, destination, current_soc, battery_capacity, battery_temp, wind_speed, ac_usage):
     loc1 = geocode_location(source)
@@ -215,7 +233,7 @@ def calculate_travel_info(source, destination, current_soc, battery_capacity, ba
     
     # Estimate average speed
     distance_km = float(distance.split()[0])
-    duration_hours = sum(x * int(t) for x, t in zip([1, 1/60, 1/3600], duration.split()[:3]))
+    duration_hours = parse_duration(duration)
     avg_speed = distance_km / duration_hours if duration_hours > 0 else 60  # default to 60 km/h if calculation fails
     
     # Predict range
@@ -231,6 +249,9 @@ def calculate_travel_info(source, destination, current_soc, battery_capacity, ba
         ac_usage=ac_usage
     )
     
+    # Calculate remaining range
+    remaining_range = predicted_range - distance_km
+    
     # Get charging suggestion
     charging_suggestion = optimal_charging_suggestion(current_soc, predicted_range, distance_km)
     
@@ -240,45 +261,82 @@ def calculate_travel_info(source, destination, current_soc, battery_capacity, ba
     # Recommend best charging point
     best_station = recommend_charging_point(charging_stations, source, destination, current_soc, battery_capacity, battery_temp, wind_speed, ac_usage)
     
-    result = f"Source: {loc1['display_name']}\n" \
-             f"Coordinates: ({loc1['lat']}, {loc1['lon']})\n" \
-             f"Elevation: {elev1:.2f}m\n\n" \
-             f"Destination: {loc2['display_name']}\n" \
-             f"Coordinates: ({loc2['lat']}, {loc2['lon']})\n" \
-             f"Elevation: {elev2:.2f}m\n\n" \
-             f"Elevation change: {abs(elev_diff):.2f}m ({elev_direction})\n" \
-             f"Shortest travel distance: {distance}\n" \
-             f"Estimated travel time: {duration}\n" \
-             f"Average speed: {avg_speed:.2f} km/h\n" \
-             f"Predicted range: {predicted_range:.2f} km\n" \
-             f"Charging suggestion: {charging_suggestion}\n\n" \
-             f"Route Details:\n"
-    
-    for i, step in enumerate(route_details, 1):
-        result += f"{i}. {step['instruction']} ({step['distance']}, {step['duration']})\n"
-    
-    result += "\nTraffic Updates:\n"
-    for update in traffic_updates:
-        result += f"{update['segment']}: {update['status']} (ETA: {update['estimated_arrival']})\n"
-    
-    result += "\nRecommended Charging Point:\n"
-    if best_station:
-        result += f"Name: {best_station['name']}\n" \
-                  f"Address: {best_station['vicinity']}\n" \
-                  f"Location: {best_station['geometry']['location']['lat']}, {best_station['geometry']['location']['lng']}\n"
-    else:
-        result += "No suitable charging stations found along the route.\n"
+    result = {
+        'source': loc1,
+        'destination': loc2,
+        'elevation_change': {
+            'value': abs(elev_diff),
+            'direction': elev_direction
+        },
+        'trip_details': {
+            'distance': distance,
+            'duration': duration,
+            'avg_speed': avg_speed,
+            'predicted_range': predicted_range,
+            'remaining_range': remaining_range,
+            'charging_suggestion': charging_suggestion
+        },
+        'route_details': route_details,
+        'traffic_updates': traffic_updates,
+        'best_charging_station': best_station
+    }
     
     return result
 
-# Get user input
-source = input("Enter the source location: ")
-destination = input("Enter the destination location: ")
-current_soc = float(input("Enter current state of charge (%): "))
-battery_capacity = float(input("Enter battery capacity (kWh): "))
-battery_temp = float(input("Enter battery temperature (°C): "))
-wind_speed = float(input("Enter wind speed (km/h): "))
-ac_usage = int(input("Is AC in use? (1 for yes, 0 for no): "))
+# Streamlit UI
+st.title('EV Range Calculator')
 
-result = calculate_travel_info(source, destination, current_soc, battery_capacity, battery_temp, wind_speed, ac_usage)
-print(result)
+st.sidebar.header('Input Parameters')
+
+source = st.sidebar.text_input('Source Location')
+destination = st.sidebar.text_input('Destination Location')
+current_soc = st.sidebar.slider('Current State of Charge (%)', 0, 100, 80)
+battery_capacity = st.sidebar.number_input('Battery Capacity (kWh)', min_value=0.0, value=75.0)
+battery_temp = st.sidebar.slider('Battery Temperature (°C)', -20, 50, 25)
+wind_speed = st.sidebar.slider('Wind Speed (km/h)', 0, 100, 10)
+ac_usage = st.sidebar.radio('AC Usage', ['Off', 'On'])
+
+ac_usage_int = 1 if ac_usage == 'On' else 0
+
+if st.sidebar.button('Calculate'):
+    if source and destination:
+        with st.spinner('Calculating travel information...'):
+            result = calculate_travel_info(source, destination, current_soc, battery_capacity, battery_temp, wind_speed, ac_usage_int)
+        
+        if isinstance(result, str):
+            st.error(result)
+        else:
+            # Display results
+            st.header('Travel Information')
+            
+            # Display source and destination information
+            st.subheader('Route Information')
+            st.write(f"Source: {result['source']['display_name']}")
+            st.write(f"Destination: {result['destination']['display_name']}")
+            
+            # Display trip details
+            st.subheader('Trip Details')
+            st.write(f"Distance: {result['trip_details']['distance']}")
+            st.write(f"Estimated Duration: {result['trip_details']['duration']}")
+            st.write(f"Average Speed: {result['trip_details']['avg_speed']:.2f} km/h")
+            st.write(f"Elevation Change: {result['elevation_change']['value']:.2f}m ({result['elevation_change']['direction']})")
+            st.write(f"Predicted Range: {result['trip_details']['predicted_range']:.2f} km")
+            st.write(f"Remaining Range: {result['trip_details']['remaining_range']:.2f} km")
+            st.write(f"Charging Suggestion: {result['trip_details']['charging_suggestion']}")
+            
+            # Display route details
+            st.subheader('Route Details')
+            for i, step in enumerate(result['route_details'], 1):
+                st.write(f"{i}. {step['instruction']} ({step['distance']}, {step['duration']})")
+            
+            # Display traffic updates
+            st.subheader('Traffic Updates')
+            for update in result['traffic_updates']:
+                st.write(f"{update['segment']}: {update['status']} (ETA: {update['estimated_arrival']})")
+            
+            # Display recommended charging point
+            st.subheader('Recommended Charging Point')
+            if result['best_charging_station']:
+                st.write(f"Name: {result['best_charging_station']['name']}")
+                st.write(f"Address: {result['best_charging_station']['vicinity']}")
+                st.write(f"Location: {result['best_charging_station']['geometry']['location']['lat']}, {result['best_charging_station']['geometry']['location']['lng']}")
