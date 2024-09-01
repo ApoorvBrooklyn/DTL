@@ -2,9 +2,10 @@ import requests
 import json
 from geopy.distance import geodesic
 import os
-
+from dotenv import load_dotenv
+import os
 # Replace with your actual Google Maps API key
-GOOGLE_MAPS_API_KEY = "AIzaSyBgE59yFelBI4VhtmV8HLP34MzT4tPr6mw"
+GOOGLE_MAPS_API_KEY = ""
 
 def get_elevation(lat, lon):
     url = f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}"
