@@ -284,14 +284,14 @@ def calculate_travel_info(source, destination, current_soc, battery_capacity, ba
     return result
 
 # Streamlit UI
-st.title('EV Range Calculator')
+st.title('Accurate EV Range Calculator')
 
 st.sidebar.header('Input Parameters')
 
 source = st.sidebar.text_input('Source Location')
 destination = st.sidebar.text_input('Destination Location')
 current_soc = st.sidebar.slider('Current State of Charge (%)', 0, 100, 80)
-battery_capacity = st.sidebar.number_input('Battery Capacity (kWh)', min_value=0.0, value=75.0)
+battery_capacity = st.sidebar.number_input('Battery Capacity (kWh)', min_value=0.0)
 battery_temp = st.sidebar.slider('Battery Temperature (°C)', -20, 50, 25)
 wind_speed = st.sidebar.slider('Wind Speed (km/h)', 0, 100, 10)
 ac_usage = st.sidebar.radio('AC Usage', ['Off', 'On'])
